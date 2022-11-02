@@ -7,11 +7,19 @@ class Archivo{
 	method tieneNombre(nombreDeArchivo) = self.nombre() == nombreDeArchivo
 	
 	method agregarContenido(contenidoAAgregar){
-		contenido = contenido + contenidoAAgregar
+		contenido += contenidoAAgregar
 	}
 	
-	method quitarContenido(contenidoAQuitar){
-		contenido = contenido - contenidoAQuitar
+	method eliminarContenido(contenidoAQuitar){
+		var posicion = contenido.size() - contenidoAQuitar.size()
+		self.validarContenido(contenidoAQuitar, posicion)
+		contenido= contenido.take(posicion)
+	}
+	
+	method validarContenido(contenidoAQuitar, posicion){
+		if(contenidoAQuitar != contenido.drop(posicion)){
+			throw new DomainException(message = "No se puede sacar ese contenido del final del archiv")
+		}
 	}
 }
 
@@ -40,7 +48,7 @@ class Carpeta{
 class Commit{
 	const descripcion
 	const cambios = []
-	const property autor
+	var property autor
 	
 	method aplicarCambiosEn(carpeta){
 		cambios.forEach{cambio => cambio.realizar(carpeta)}
@@ -50,7 +58,7 @@ class Commit{
 	
 	method revert() = new Commit(
 		descripcion = "revert" + descripcion,
-		cambios = cambios.map({ cambios => cambios.revertir() }).reverse(),
+		cambios = cambios.map{unCambio=>unCambio.revertir()}.reverse(),
 		autor = autor
 	)
 	
@@ -60,23 +68,31 @@ class Cambio{
 	const property nombreDelArchivo
 	
 	method realizar(carpeta){
-		const archivo = self.archivoAModificar(carpeta)
-		self.aplicar(archivo, carpeta)
+		self.validarModificacion(carpeta)
+		self.aplicar(carpeta)
 	}
 	
-	method archivoAModificar(carpeta) = carpeta.buscar(nombreDelArchivo)
+	method validarModificacion(carpeta) {
+		if(!carpeta.contiene(nombreDelArchivo)){
+			throw new DomainException(message = "La carpeta no cuenta con el archivo buscado")
+		}
+	} 
 	
-	method aplicar(archivo, carpeta)
+	method aplicar(carpeta)
 	
 	method modificaA(unNombreArchivo) = nombreDelArchivo == unNombreArchivo
 }
 
 class Crear inherits Cambio{
 	
-	override method archivoAModificar(carpeta) = new Archivo(nombre = nombreDelArchivo)
+	override method validarModificacion(carpeta) {
+		if(carpeta.contiene(nombreDelArchivo)){
+			throw new DomainException(message = "La carpeta ya cuenta con un archivo con es enombre")
+		}
+	} 
 	
-	override method aplicar(archivo, carpeta){
-		carpeta.agregar(archivo)
+	override method aplicar(carpeta){
+		carpeta.agregar(nombreDelArchivo)
 		
 	}
 	
@@ -85,8 +101,8 @@ class Crear inherits Cambio{
 
 class Eliminar inherits Cambio{
 	
-	override method aplicar(archivo, carpeta){
-		carpeta.eliminar(archivo)
+	override method aplicar(carpeta){
+		carpeta.eliminar(nombreDelArchivo)
 	}
 	
 	method revertir() = new Crear(nombreDelArchivo = nombreDelArchivo)
@@ -96,8 +112,8 @@ class Eliminar inherits Cambio{
 class Agregar inherits Cambio{
 	const contenidoAAgregar
 	
-	override method aplicar(archivo, carpeta){
-		archivo.agregarContenido(contenidoAAgregar)
+	override method aplicar(carpeta){
+		carpeta.buscar(nombreDelArchivo).agregarContenido(contenidoAAgregar)
 		}
 		
 	method revertir() = new Sacar(nombreDelArchivo = nombreDelArchivo, quitarContenido = contenidoAAgregar)
@@ -106,8 +122,8 @@ class Agregar inherits Cambio{
 class Sacar inherits Cambio{
 	const quitarContenido
 	
-	override method aplicar(archivo, carpeta){
-		archivo.eliminarContenido(quitarContenido)
+	override method aplicar(carpeta){
+		carpeta.buscar(nombreDelArchivo).eliminarContenido(quitarContenido)
 	}
 	
 	method revertir() = new Agregar(nombreDelArchivo = nombreDelArchivo, contenidoAAgregar = quitarContenido)
@@ -115,8 +131,8 @@ class Sacar inherits Cambio{
 }
 
 // BRANCHES
-class Branches{
-	var commits = []
+class Branch{
+	var property commits = []
 	var colaboradores = []
 	
 	method checkoutEn(unaCarpeta) {
@@ -125,10 +141,6 @@ class Branches{
 	
 	method logDe(unNombreArchivo) = commits.filter{commit => commit.afectaA(unNombreArchivo)}
 	
-	method commitear(commit) {
-		self.autorizarCommitDe(commit.autor())
-		commits.add(commit)
-	} 
 	
 	method autorizarCommitDe(usuario) {
 		if(!usuario.tienePermisoParCommitearEn(self)){
@@ -138,36 +150,79 @@ class Branches{
 	
 	method esColaborador(usuario) = colaboradores.contains(usuario) 
 	
-	method blame(nombreDeArchivo) = self.logDe(nombreDeArchivo).map{commit => commit.autores()}
+	method agregarColaborador(usuario){
+		colaboradores.add(usuario)
+	}
+	
+	method blame(nombreDeArchivo) = self.logDe(nombreDeArchivo).map{commit => commit.autor()}.asSet()
+	
+	method agregarCommit(commit){
+		commits.add(commit)
+	}
 
 }
 //USUARIOS
 
 class Usuario{
-	var rol
+	var property rol
 	
-	method tienePermisoParaCommitearEn(branch) = branch.esColaborador() || rol.tienePermisosNecesariosEn(branch)
+	method crearBranch() = new Branch(colaboradores = [self])
+	
+	method tienePermisoParaCommitearEn(branch) {
+		if(!rol.tienePermisosNecesariosEn(branch,self)){
+			throw new DomainException(message="No tiene permisos para commitear")
+		}
+	} 
 	method cambiarRol(rolNuevo){
 		rol = rolNuevo
 	}
+	
+	method commitear(commit, branch){
+		self.tienePermisoParaCommitearEn(branch)
+		commit.autor(self)
+		branch.agregarCommit(commit)
+	}
+	
+	method convertirEnAdmin(usuarios){
+		usuarios.forEach{usuario => usuario.rol(administrador)}
+	}
+	
+	method quitarPermisoAdmin(usuario){
+		rol.modificarPermiso(usuario,comun)
+	}
+	
+
+
 }
 
 object administrador{
 	
-	method tienePermisosNecesariosEn(branch) = true
+	method tienePermisosNecesariosEn(branch, usuario) = true
 	
 	method cambiarRoles(usuarios, rol){
 		usuarios.forEach{usuario => usuario.cambiarRol(rol)}
+	}
+	
+	method modificarPermiso(usuario, unRol){
+		usuario.rol(unRol)
 	}
 }
 
 object comun{
 	
-	method tienePermisosNecesariosEn(branch) = false
+	method tienePermisosNecesariosEn(branch, usuario) = branch.esColaborador(usuario)
+	
+	method modificarPermiso(usuario, unRol){
+		throw new DomainException(message="no tiene permiso para modificar rol")
+	}
 }
 
 object bot{
 	
-	method tienePermisosNecesariosEn(branch) = branch.commits().size() > 10 
+	method tienePermisosNecesariosEn(branch, usuario) = branch.commits().size() > 10 && branch.esColaborador(usuario)
+	
+	method modificarPermiso(usuario, unRol){
+		throw new DomainException(message="no tiene permiso para modificar rol")
+	}
 }
 
